@@ -24,7 +24,10 @@ RANDOM_STATE = 42
 TEST_SIZE = 0.2
 
 MLFLOW_EXPERIMENT = "VPN Traffic Classification"
-MLFLOW_TRACKING_URI = "sqlite:////app/mlflow.db"
+MLFLOW_TRACKING_URI = os.environ.get(
+    "MLFLOW_TRACKING_URI",
+    "sqlite:///mlflow.db",
+)
 
 
 def load_data():
