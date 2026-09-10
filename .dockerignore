@@ -1,4 +1,4 @@
-.git
+﻿.git
 .github
 
 __pycache__
@@ -10,8 +10,6 @@ notebooks/
 
 mlruns/
 mlflow.db
-
-models/
 
 .venv/
 venv/
