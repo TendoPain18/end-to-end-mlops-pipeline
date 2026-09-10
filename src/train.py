@@ -5,6 +5,9 @@ import mlflow
 import mlflow.sklearn
 import pandas as pd
 
+from mlflow.exceptions import MlflowException
+from mlflow.tracking import MlflowClient
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
@@ -28,6 +31,9 @@ MLFLOW_TRACKING_URI = os.environ.get(
     "MLFLOW_TRACKING_URI",
     "sqlite:///mlflow.db",
 )
+
+REGISTERED_MODEL_NAME = "traffic_classifier"
+PRODUCTION_ALIAS = "production"
 
 
 def load_data():
@@ -173,6 +179,49 @@ def save_model(pipeline):
     )
 
 
+def get_production_macro_f1(client):
+    """
+    Return the macro_f1 of the run currently tagged as the
+    'production' model version, or None if no production
+    version exists yet.
+    """
+
+    try:
+        production_version = client.get_model_version_by_alias(
+            REGISTERED_MODEL_NAME,
+            PRODUCTION_ALIAS,
+        )
+    except MlflowException:
+        return None
+
+    run = client.get_run(production_version.run_id)
+
+    return run.data.metrics.get("macro_f1")
+
+
+def promote_model(model_uri, client, macro_f1):
+    """
+    Register this run's model in the MLflow Model Registry
+    and mark it as the 'production' version.
+    """
+
+    model_version = mlflow.register_model(
+        model_uri=model_uri,
+        name=REGISTERED_MODEL_NAME,
+    )
+
+    client.set_registered_model_alias(
+        REGISTERED_MODEL_NAME,
+        PRODUCTION_ALIAS,
+        model_version.version,
+    )
+
+    print(
+        f"\nPromoted version {model_version.version} to "
+        f"'{PRODUCTION_ALIAS}' (macro_f1={macro_f1:.4f})"
+    )
+
+
 def main():
     print("Loading dataset...")
 
@@ -211,7 +260,9 @@ def main():
         MLFLOW_EXPERIMENT
     )
 
-    with mlflow.start_run():
+    client = MlflowClient()
+
+    with mlflow.start_run() as run:
 
         print(
             "\nCreating model pipeline..."
@@ -255,7 +306,7 @@ def main():
             "weighted_f1": weighted_f1,
         })
 
-        mlflow.sklearn.log_model(
+        model_info = mlflow.sklearn.log_model(
             pipeline,
             name="traffic_classifier",
             skops_trusted_types=[
@@ -264,9 +315,43 @@ def main():
             ],
         )
 
-        save_model(
-            pipeline
+        print(
+            "\nChecking current production model..."
         )
+
+        current_production_f1 = get_production_macro_f1(client)
+
+        if current_production_f1 is None:
+            print(
+                "No production model registered yet."
+            )
+        else:
+            print(
+                f"Current production macro_f1: "
+                f"{current_production_f1:.4f}"
+            )
+
+        should_promote = (
+            current_production_f1 is None
+            or macro_f1 > current_production_f1
+        )
+
+        if should_promote:
+            promote_model(
+                model_info.model_uri,
+                client,
+                macro_f1,
+            )
+
+            save_model(
+                pipeline
+            )
+        else:
+            print(
+                "\nNew model did not outperform the current "
+                "production model. Skipping promotion; "
+                "models/traffic_classifier.joblib left unchanged."
+            )
 
         print(
             "\nMLflow run completed."
