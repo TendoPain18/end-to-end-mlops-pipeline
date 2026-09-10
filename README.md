@@ -1,111 +1,85 @@
-# End-to-End MLOps Pipeline — VPN Traffic Classification
+# End-to-End MLOps Pipeline 🚦🤖
 
-A complete MLOps workflow for classifying network traffic type (e.g. `BROWSING`, `VOIP`, `VPN-P2P`, ...) from flow-level statistics. Built to demonstrate the full lifecycle: data exploration → experiment tracking → reproducible training → containerized serving → automated testing in CI.
+An end-to-end MLOps pipeline for classifying VPN network traffic, covering data preprocessing, model training with experiment tracking, a FastAPI serving layer, containerization, and Kubernetes deployment with autoscaling.
 
-## Overview
+## 📋 Description
 
-| Stage | Tool |
-|---|---|
-| Experiment tracking | MLflow |
-| Model training | scikit-learn (RandomForestClassifier) |
-| Serving | FastAPI + Uvicorn |
-| Containerization | Docker |
-| CI | GitHub Actions |
+This project trains a Random Forest classifier to identify the type of application traffic (e.g. Browsing, VoIP, Streaming, P2P, and their VPN variants) from network flow features. It wraps the full lifecycle: data exploration, preprocessing, training with MLflow tracking and model registry, automated promotion of better-performing models, a FastAPI prediction service, CI via GitHub Actions, and Kubernetes manifests with a Horizontal Pod Autoscaler.
 
-The model predicts one of 14 traffic classes (7 regular + 7 VPN-tunneled equivalents) from 23 flow-based features (packet timing, inter-arrival times, active/idle periods, etc.), based on the ISCX VPN-nonVPN dataset.
+## ✨ Features
 
-## Project structure
+- **Data Preprocessing**: Handles sentinel negative values via NaN replacement and median imputation
+- **Model Training**: Random Forest classifier with group-aware train/test splitting to avoid data leakage
+- **Experiment Tracking**: MLflow logging of params, metrics, and models, with automatic promotion to a "production" alias when a new model outperforms the current one
+- **Serving API**: FastAPI app with `/predict` and `/health` endpoints
+- **CI Pipeline**: GitHub Actions workflow that trains the model and runs tests on every push
+- **Containerization**: Dockerfile for building the API service
+- **Kubernetes Deployment**: Deployment, Service, and HPA manifests for scaling the API based on CPU utilization
 
+## 🚀 Getting Started
+
+### Prerequisites
 ```
-├── data/                   # Training dataset (consolidated_traffic_data.csv)
-├── notebooks/              # Exploratory data analysis
-├── src/
-│   ├── preprocess.py       # Shared preprocessing (negative-sentinel → NaN → median impute)
-│   ├── train.py            # Trains the pipeline, logs to MLflow, saves to models/
-│   └── api.py              # FastAPI app serving predictions
-├── tests/
-│   └── test_api.py         # API tests (root, health, predict, validation)
-├── Dockerfile
-├── requirements.txt
-└── .github/workflows/ci.yml
+Python 3.12+
+Docker
+Kubernetes (optional, for deployment)
 ```
 
-## How it works
+### Installation
+```bash
+git clone https://github.com/yourusername/end-to-end-mlops-pipeline.git
+cd end-to-end-mlops-pipeline
+pip install -r requirements.txt
+```
 
-1. **Preprocessing** (`src/preprocess.py`): the dataset uses `-1` as a sentinel for unavailable measurements. These are converted to `NaN` and then median-imputed. This logic is wrapped in a scikit-learn `Pipeline` step so it's applied identically during training and inference — no train/serve skew.
-
-2. **Training** (`src/train.py`):
-   - Splits data with `GroupShuffleSplit`, grouped by exact feature combination, so duplicate rows (~31% of the dataset) can't leak between train and test.
-   - Trains a `RandomForestClassifier` inside a single `Pipeline` (preprocessing + model), so the saved artifact is self-contained.
-   - Logs parameters, metrics (accuracy, macro F1, weighted F1), and the model itself to MLflow.
-   - Saves the trained pipeline to `models/traffic_classifier.joblib`.
-
-3. **Serving** (`src/api.py`): a FastAPI app that loads the saved pipeline once at startup and exposes:
-   - `GET /` — basic status message
-   - `GET /health` — health check
-   - `POST /predict` — takes the 23 raw features as JSON, returns the predicted traffic type
-
-4. **CI** (`.github/workflows/ci.yml`): on every push/PR, GitHub Actions installs dependencies, **trains the model from scratch** (training takes under a minute), then runs the test suite against the freshly trained model. This proves the whole pipeline is reproducible from nothing but the code and the committed dataset — not just tested against a pre-baked model file.
-
-## Running locally
-
-**Train the model:**
+### Train the Model
 ```bash
 python -m src.train
 ```
-This reads `data/consolidated_traffic_data.csv`, trains the pipeline, logs the run to MLflow (local SQLite backend), and saves `models/traffic_classifier.joblib`.
 
-**View experiment results:**
+### Run the API
 ```bash
-mlflow ui --backend-store-uri sqlite:///mlflow.db
-```
-Then open `http://localhost:5000`.
-
-**Run the API directly:**
-```bash
-uvicorn src.api:app --reload
+uvicorn src.api:app --host 0.0.0.0 --port 8000
 ```
 
-**Run tests:**
-```bash
-pytest
-```
-
-## Running with Docker
-
+### Run with Docker
 ```bash
 docker build -t mlops-pipeline .
 docker run -p 8000:8000 mlops-pipeline
 ```
 
-The image expects `models/traffic_classifier.joblib` to already exist locally (run training first — the model is not trained inside the image build).
-
-**Test it:**
+### Deploy to Kubernetes
 ```bash
-curl http://localhost:8000/health
+kubectl apply -f k8s/
 ```
 
-Example prediction request:
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "duration": 0.0, "total_fiat": 0.0, "total_biat": 0.0,
-    "min_fiat": -1.0, "min_biat": -1.0, "max_fiat": -1.0, "max_biat": -1.0,
-    "mean_fiat": 0.0, "mean_biat": 0.0,
-    "flowPktsPerSecond": 0.0, "flowBytesPerSecond": 0.0,
-    "min_flowiat": -1.0, "max_flowiat": -1.0, "mean_flowiat": 0.0, "std_flowiat": 0.0,
-    "min_active": -1.0, "mean_active": 0.0, "max_active": -1.0, "std_active": 0.0,
-    "min_idle": -1.0, "mean_idle": 0.0, "max_idle": -1.0, "std_idle": 0.0
-  }'
-```
+## 📊 Autoscaling
 
-## Dataset
+The Horizontal Pod Autoscaler scales the API deployment between 1 and 5 replicas based on CPU utilization (target: 50%).
 
-Based on the ISCX VPN-nonVPN flow-statistics dataset. 14 classes across regular and VPN-tunneled traffic: `BROWSING`, `CHAT`, `FT`, `MAIL`, `P2P`, `STREAMING`, `VOIP`, and their `VPN-` equivalents.
+<div align="center">
+  <img src="images/pods_down.png" alt="Pods scaled down" width="70%"/>
+  <br/>
+  <em>Pod count at low load</em>
+  <br/><br/>
+  <img src="images/pods_up.png" alt="Pods scaled up under load" width="70%"/>
+  <br/>
+  <em>Scaled up under load</em>
+</div>
 
-## Current limitations / next steps
+## 🛠️ Built With
 
-- The API loads a static local model file rather than pulling "the best" version from the MLflow Model Registry — model selection is currently manual.
-- `requirements.txt` is unpinned; exact versions aren't locked for full reproducibility.
-- No Kubernetes deployment yet (planned as a follow-up project, adding autoscaling with an HPA).
+- **Language**: Python
+- **ML**: scikit-learn, pandas, numpy
+- **Experiment Tracking**: MLflow
+- **API**: FastAPI, Uvicorn
+- **Containerization**: Docker
+- **Orchestration**: Kubernetes (Deployment, Service, HPA)
+- **CI**: GitHub Actions
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## <!-- CONTACT -->
+<!-- END CONTACT -->
